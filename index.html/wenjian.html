@@ -2,142 +2,475 @@
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>GLM模型测试</title>
+    <title>手势控制地球模型（防抖版）</title>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.min.js"></script>
     <style>
         body { 
             margin: 0; 
-            overflow: hidden; /* 防止页面滚动条 */
+            background: #000;
+            overflow: hidden;
+        }
+        .video-container {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 150px;
+            height: 120px;
+            z-index: 100;
+            border: 1px solid #333;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 0 10px rgba(0,255,255,0.3);
+        }
+        #video { 
+            width: 100%; 
+            height: 100%; 
+            object-fit: cover;
+            transform: scaleX(-1); 
+        }
+        .loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #fff;
+            font-size: 18px;
+            z-index: 200;
+            background: rgba(0,0,0,0.7);
+            padding: 20px 40px;
+            border-radius: 10px;
+            border: 1px solid #444;
+        }
+        .loading:after {
+            content: '...';
+            animation: dots 1.5s infinite;
+        }
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+        .debug {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            color: #0f0;
+            font-family: monospace;
+            font-size: 12px;
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 100;
+            display: block; /* 默认显示调试信息 */
+        }
+        .error {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(255,0,0,0.8);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            z-index: 1000;
+            max-width: 300px;
+            display: none;
         }
     </style>
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
-                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
-            }
-        }
-    </script>
 </head>
 <body>
-    <!-- 加载提示信息 -->
-    <div id="loading" style="position: absolute; top: 20px; left: 20px; color: white; font-family: Arial; z-index: 100;">
-        正在加载模型...
+    <div class="loading">加载地球模型中</div>
+    <div class="debug" id="debug">调试信息...</div>
+    <div class="error" id="error"></div>
+    <div class="video-container">
+        <video id="video" autoplay playsinline muted></video>
     </div>
 
-    <script type="module">
-        import * as THREE from 'three';
-        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    <script>
+        // === 调试信息 ===
+        function updateDebug(msg) {
+            const debug = document.getElementById('debug');
+            const time = new Date().toLocaleTimeString();
+            debug.innerHTML = `[${time}] ${msg}`;
+            console.log(msg);
+        }
 
-        // 1. 创建场景、相机、渲染器
-        const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x333333); // 设置深色背景便于观察
+        updateDebug("初始化Three.js...");
 
-        const camera = new THREE.PerspectiveCamera(
-            75, 
-            window.innerWidth / window.innerHeight, 
-            0.1, 
-            1000
-        );
-        camera.position.set(2, 2, 5); // 调整到一个更好的观察位置
-        
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(window.devicePixelRatio); // 适配高清屏
-        document.body.appendChild(renderer.domElement);
+        // Three.js 核心初始化
+        let renderer, scene, camera;
+        try {
+            renderer = new THREE.WebGLRenderer({ 
+                antialias: true,
+                alpha: true 
+            });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setClearColor(0x000000, 1);
+            document.body.appendChild(renderer.domElement);
+            
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+            camera.position.z = 5;
 
-        // 2. 添加轨道控制器（用鼠标拖拽旋转/缩放模型）
-        const controls = new OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true; // 添加阻尼感，更平滑
-        controls.dampingFactor = 0.05;
+            updateDebug("Three.js初始化成功");
+        } catch (e) {
+            updateDebug(`Three.js初始化失败: ${e.message}`);
+            showError(`Three.js初始化失败: ${e.message}`);
+        }
 
-        // 3. 添加光源（非常重要！没有光源模型是黑色的）
-        // 环境光
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        // 光源
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
         scene.add(ambientLight);
-        
-        // 平行光（模拟阳光）
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        directionalLight.position.set(5, 10, 7);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        directionalLight.position.set(5, 5, 5);
         scene.add(directionalLight);
 
-        // 4. 添加坐标轴辅助（便于理解3D空间）
-        const axesHelper = new THREE.AxesHelper(3);
-        scene.add(axesHelper);
+        // 模型变量
+        let earthModel = null;
+        let isLoading = true;
 
-        // 5. 加载GLB模型
-        const loader = new GLTFLoader();
-        const loadingElement = document.getElementById('loading');
-        
-        loader.load(
-            // ⚠️ 模型路径：确保 `yueqiu.glb` 文件放在与HTML文件同级的 `models` 文件夹中
-            '../models/yueqiu.glb',
-            
-            // 加载成功回调
-            (gltf) => {
-                console.log('✅ 模型加载成功！', gltf);
-                loadingElement.textContent = '模型加载成功！';
-                
-                const model = gltf.scene;
-                
-                // 调整模型位置到场景中心
-                model.position.set(0, 0, 0);
-                
-                // 计算模型大小，自动调整相机
-                const box = new THREE.Box3().setFromObject(model);
-                const center = box.getCenter(new THREE.Vector3());
-                const size = box.getSize(new THREE.Vector3());
-                
-                // 确保相机能看到整个模型
-                const maxDim = Math.max(size.x, size.y, size.z);
-                camera.position.copy(center);
-                camera.position.z += maxDim * 1.5;
-                camera.lookAt(center);
-                
-                scene.add(model);
-                
-                // 3秒后隐藏加载提示
-                setTimeout(() => {
-                    loadingElement.style.display = 'none';
-                }, 3000);
-            },
-            
-            // 加载进度回调
-            (xhr) => {
-                const percent = Math.round((xhr.loaded / xhr.total) * 100);
-                loadingElement.textContent = `正在加载模型... ${percent}%`;
-                console.log(`加载进度: ${percent}%`);
-            },
-            
-            // 加载失败回调
-            (error) => {
-                console.error('❌ 模型加载失败:', error);
-                loadingElement.innerHTML = `
-                    模型加载失败！<br>
-                    可能原因：<br>
-                    1. 模型文件路径不正确<br>
-                    2. 模型文件损坏<br>
-                    3. 服务器不允许加载GLB文件<br>
-                    <small>检查控制台(F12)获取详细信息</small>
-                `;
-                loadingElement.style.color = '#ff6666';
-            }
-        );
+        // 显示错误信息
+        function showError(msg) {
+            const errorDiv = document.getElementById('error');
+            errorDiv.innerHTML = msg;
+            errorDiv.style.display = 'block';
+        }
 
-        // 6. 窗口大小调整响应
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
+        // 加载GLB模型
+        function loadGLBModel() {
+            return new Promise((resolve, reject) => {
+                // 重要：使用相对路径！
+                // 确保 yueqiu.glb 文件与HTML文件在同一目录
+                const modelPath = "yueqiu.glb";
+                
+                updateDebug(`尝试加载模型: ${modelPath}`);
+                
+                // 检查GLTFLoader是否可用
+                if (typeof THREE.GLTFLoader === 'undefined') {
+                    const error = "GLTFLoader未加载，检查Three.js版本";
+                    updateDebug(error);
+                    reject(new Error(error));
+                    return;
+                }
+
+                const loader = new THREE.GLTFLoader();
+                
+                // 设置超时
+                const timeout = setTimeout(() => {
+                    reject(new Error("模型加载超时（10秒）"));
+                }, 10000);
+
+                loader.load(
+                    modelPath,
+                    (gltf) => {
+                        clearTimeout(timeout);
+                        updateDebug("模型文件加载成功");
+                        
+                        earthModel = gltf.scene;
+                        
+                        // 检查模型是否有内容
+                        if (earthModel.children.length === 0) {
+                            updateDebug("警告：模型没有子对象");
+                        }
+                        
+                        // 自动调整模型大小和位置
+                        const box = new THREE.Box3().setFromObject(earthModel);
+                        const center = box.getCenter(new THREE.Vector3());
+                        const size = box.getSize(new THREE.Vector3());
+                        updateDebug(`模型尺寸: ${size.x.toFixed(2)}, ${size.y.toFixed(2)}, ${size.z.toFixed(2)}`);
+                        
+                        const maxDim = Math.max(size.x, size.y, size.z);
+                        const scale = maxDim > 0 ? 3 / maxDim : 1;
+                        earthModel.scale.setScalar(scale);
+                        earthModel.position.sub(center.multiplyScalar(scale));
+                        
+                        scene.add(earthModel);
+                        isLoading = false;
+                        
+                        updateDebug("模型已添加到场景");
+                        resolve();
+                    },
+                    (xhr) => {
+                        const percent = Math.round(xhr.loaded / xhr.total * 100);
+                        updateDebug(`加载进度: ${percent}%`);
+                        document.querySelector('.loading').textContent = `加载模型中 ${percent}%`;
+                    },
+                    (error) => {
+                        clearTimeout(timeout);
+                        updateDebug(`模型加载失败: ${error.message}`);
+                        
+                        // 提供更详细的错误信息
+               let errorMsg = "模型加载失败。";
+                        if (error.message.includes('404')) {
+                            errorMsg += ` 文件未找到: ${modelPath}`;
+                        } else if (error.message.includes('CORS')) {
+                            errorMsg += " CORS错误。请使用Live Server而不是直接打开文件。";
+                        } else if (error.message.includes('NetworkError')) {
+                            errorMsg += " 网络错误。请检查文件路径。";
+                        }
+                        
+                        showError(errorMsg);
+                        reject(error);
+                    }
+                );
+            });
+        }
+
+        // 备用地球
+        function createFallbackEarth() {
+            updateDebug("创建备用地球模型...");
+            
+            const geometry = new THREE.SphereGeometry(1.5, 64, 64);
+            const textureLoader = new THREE.TextureLoader();
+            
+            // 尝试加载地球纹理
+            textureLoader.load(
+                'https://cdn.jsdelivr.net/npm/three-globe/example/img/earth-blue-marble.jpg',
+                (texture) => {
+                    const material = new THREE.MeshPhongMaterial({ 
+                        map: texture, 
+                        shininess: 10 
+                    });
+                    earthModel = new THREE.Mesh(geometry, material);
+                    scene.add(earthModel);
+                    isLoading = false;
+                    updateDebug("备用地球创建成功（带纹理）");
+                },
+                undefined,
+                (error) => {
+                    updateDebug("纹理加载失败，使用纯色材质");
+                    const material = new THREE.MeshPhongMaterial({ 
+                        color: 0x4477ff, 
+                        shininess: 30 
+                    });
+                    earthModel = new THREE.Mesh(geometry, material);
+                    scene.add(earthModel);
+                    isLoading = false;
+                    updateDebug("备用地球创建成功（纯色）");
+                }
+            );
+        }
+
+        // 启动加载
+        updateDebug("开始加载模型...");
+        loadGLBModel().then(() => {
+            updateDebug("✅ 模型加载完成");
+            hideLoading();
+        }).catch((error) => {
+            updateDebug(`模型加载失败，使用备用: ${error.message}`);
+            console.error("模型加载错误详情:", error);
+            createFallbackEarth();
+            hideLoading();
         });
 
-        // 7. 动画循环
+        // 手势检测
+        const videoElement = document.getElementById('video');
+        const hands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${file}`
+        });
+
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5,
+            selfieMode: true
+        });
+
+        // 手势控制变量
+        let currentScale = 1;
+        let targetScale = 1;
+        let isHandDetected = false;
+        let smoothHandX = 0;
+        let smoothHandY = 0;
+        let lastSmoothX = 0;
+        let lastSmoothY = 0;
+        let lastIndexTipDistance = 0;
+
+        const smoothFactor = 0.15;
+        const rotationSensitivity = 3;
+        const maxRotationDelta = 0.05;
+        const scaleSmoothFactor = 0.1;
+        const scaleSensitivity = 3;
+        const minScaleDistance = 0.05;
+
+        // 计算手指距离
+        function calculateFingerDistance(landmarks) {
+            if (!landmarks || landmarks.length < 9) return 0;
+            const thumbTip = landmarks[4];
+            const indexTip = landmarks[8];
+            if (!thumbTip || !indexTip) return 0;
+            const dx = thumbTip.x - indexTip.x;
+            const dy = thumbTip.y - indexTip.y;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        // 手势结果处理
+        hands.onResults((results) => {
+            if (isLoading || !earthModel) return;
+            
+            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+                isHandDetected = false;
+                targetScale = targetScale * 0.98 + 1 * 0.02;
+                updateDebug("未检测到手部");
+                return;
+            }
+
+            const landmarks = results.multiHandLandmarks[0];
+            if (!landmarks || landmarks.length === 0) return;
+            
+            const wrist = landmarks[0];
+            
+            if (!isHandDetected) {
+                smoothHandX = wrist.x;
+                smoothHandY = wrist.y;
+                lastSmoothX = wrist.x;
+                lastSmoothY = wrist.y;
+                lastIndexTipDistance = calculateFingerDistance(landmarks);
+                isHandDetected = true;
+                updateDebug("手部检测开始");
+            }
+
+            // 平滑旋转
+            smoothHandX = smoothHandX * (1 - smoothFactor) + wrist.x * smoothFactor;
+            smoothHandY = smoothHandY * (1 - smoothFactor) + wrist.y * smoothFactor;
+            let deltaX = smoothHandX - lastSmoothX;
+            let deltaY = smoothHandY - lastSmoothY;
+            deltaX = Math.max(-maxRotationDelta, Math.min(maxRotationDelta, deltaX));
+            deltaY = Math.max(-maxRotationDelta, Math.min(maxRotationDelta, deltaY));
+            
+            if (earthModel) {
+                earthModel.rotation.y += deltaX * rotationSensitivity;
+                earthModel.rotation.x -= deltaY * rotationSensitivity;
+            }
+
+            // 缩放控制
+            const currentDistance = calculateFingerDistance(landmarks);
+            const distanceDelta = currentDistance - lastIndexTipDistance;
+            if (Math.abs(distanceDelta) > minScaleDistance) {
+                targetScale += distanceDelta * scaleSensitivity;
+                targetScale = Math.max(0.3, Math.min(3, targetScale));
+            }
+            
+            lastIndexTipDistance = currentDistance;
+            lastSmoothX = smoothHandX;
+            lastSmoothY = smoothHandY;
+
+            updateDebug(`旋转: ${earthModel?.rotation.y.toFixed(2)}, 缩放: ${targetScale.toFixed(2)}`);
+        });
+
+        // 启动摄像头
+        async function initializeCamera() {
+            try {
+                updateDebug("初始化摄像头...");
+                await hands.initialize();
+                
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        facingMode: 'user', 
+                        width: { ideal: 640 }, 
+                        height: { ideal: 480 } 
+                    } 
+                });
+                
+                videoElement.srcObject = stream;
+                updateDebug("摄像头启动成功");
+                
+                // 持续检测
+                const processFrame = () => {
+                    if (videoElement.readyState === videoElement.HAVE_ENOUGH_DATA) {
+                        hands.send({ image: videoElement });
+                    }
+                    requestAnimationFrame(processFrame);
+                };
+                processFrame();
+                
+            } catch (err) {
+                updateDebug(`摄像头初始化失败: ${err.message}`);
+                shoError("摄像头权限被拒绝，请允许摄像头访问");
+            }
+        }
+
+        // 动画循环
         function animate() {
             requestAnimationFrame(animate);
-            controls.update(); // 更新轨道控制器
-            renderer.render(scene, camera);
+            
+            if (earthModel && !isLoading) {
+                currentScale = currentScale * (1 - scaleSmoothFactor) + targetScale * scaleSmoothFactor;
+                earthModel.scale.set(currentScale, currentScale, currentScale);
+                
+                // 无手势时缓慢自转
+                if (!isHandDetected) {
+                    earthModel.rotation.y += 0.002;
+                }
+            }
+            
+            if (renderer && scene && camera) {
+                renderer.render(scene, camera);
+            }
         }
+
+        // 隐藏加载提示
+        function hideLoading() {
+            const loading = document.querySelector('.loading');
+            if (loading) {
+                loading.style.opacity = '0';
+                setTimeout(() => {
+                    loading.style.display = 'none';
+                }, 500);
+            }
+        }
+
+        // 窗口适配
+        window.addEventListener('resize', () => {
+            if (camera && renderer) {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+        });
+
+        // 启动
+        initializeCamera();
         animate();
+
+        // 文件检查
+        function checkFileExists(url) {
+            return fetch(url, { method: 'HEAD' })
+                .then(res => res.ok)
+                .catch(() => false);
+        }
+
+        // 检查模型文件是否存在
+        setTimeout(() => {
+            checkFileExists("./yueqiu.glb").then(exists => {
+                if (!exists) {
+                    showError(`模型文件未找到: ./yueqiu.glb<br>请确保文件与HTML在同一目录`);
+                    updateDebug("模型文件不存在");
+                } else {
+                    updateDebug("模型文件存在");
+                }
+            });
+        }, 1000);
+
+        // 键盘控制
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'd' || e.key === 'D') {
+                const debug = document.getElementById('debug');
+                debug.style.display = debug.style.display === 'none' ? 'block' : 'none';
+            }
+            if (e.key === 'r' || e.key === 'R') {
+                // 重置模型
+                if (earthModel) {
+                    earthModel.rotation.set(0, 0, 0);
+                    earthModel.scale.set(1, 1, 1);
+                    earthModel.position.set(0, 0, 0);
+                    targetScale = 1;
+                }
+            }
+        });
+
     </script>
 </body>
 </html>
